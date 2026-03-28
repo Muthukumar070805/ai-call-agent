@@ -24,7 +24,7 @@ const twilioClient = twilio(
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// SMS Routes (Ollama-powered)
+// SMS Routes (local LLM via Ollama — voice handled separately by ElevenLabs)
 app.use('/', smsRouter);
 
 // Address collection SMS routes
