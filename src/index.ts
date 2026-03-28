@@ -3,7 +3,10 @@ import express, { Request, Response } from "express";
 import { createServer } from "http";
 import { WebSocketServer, WebSocket } from "ws";
 import twilio from "twilio";
-import { connectToElevenLabs } from './elevenlabs';
+import { connectToElevenLabs } from './llm';
+import smsRouter from './sms';
+import addressSmsRouter from './addressSms';
+import networkFallbackRouter from './networkFallback';
 
 const app = express();
 const server = createServer(app);
@@ -21,6 +24,15 @@ const twilioClient = twilio(
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
+// SMS Routes (Ollama-powered)
+app.use('/', smsRouter);
+
+// Address collection SMS routes
+app.use('/', addressSmsRouter);
+
+// Network fallback routes (SMS/Call when frontend detects poor network)
+app.use('/', networkFallbackRouter);
+
 // Health check
 app.get("/", (req: Request, res: Response) => {
     res.send("AI Voice Agent Server Running");
@@ -34,6 +46,23 @@ app.post("/voice", (req: Request, res: Response) => {
     response.say("Hello! This is your AI voice agent. Let me connect you.");
 
     // Connect to bidirectional stream
+    const connect = response.connect();
+    connect.stream({
+        url: `wss://${req.headers.host}/media-stream`
+    });
+
+    res.type("text/xml");
+    res.send(response.toString());
+});
+
+// Inbound call webhook - Twilio hits this when someone calls your number
+app.post("/incoming-call", (req: Request, res: Response) => {
+    const callerNumber = req.body?.From || "Unknown";
+    console.log(`📲 Incoming call from: ${callerNumber}`);
+
+    const response = new twilio.twiml.VoiceResponse();
+    response.say("Hello! Welcome. I am your AI assistant. How can I help you today?");
+
     const connect = response.connect();
     connect.stream({
         url: `wss://${req.headers.host}/media-stream`
@@ -68,7 +97,7 @@ function handleTwilioConnection(twilioWs: WebSocket) {
                     process.env.ELEVENLABS_AGENT_ID!,
                     process.env.ELEVENLABS_API_KEY!
                 );
-
+                
                 // Set up bidirectional audio bridge
                 setupElevenLabsHandlers(elevenLabsWs, twilioWs, streamSid!);
                 break;
@@ -104,8 +133,6 @@ function setupElevenLabsHandlers(
 
     elevenLabsWs.on('message', (data: string) => {
         const message = JSON.parse(data);
-
-
         switch (message.type) {
             case 'audio':
                 // Send AI audio back to caller
@@ -147,9 +174,6 @@ function setupElevenLabsHandlers(
     });
 }
 
-
-
-
 // Function to make outbound call
 async function makeCall(to: string): Promise<void> {
     try {
@@ -175,4 +199,12 @@ const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
     console.log(`Server running on port ${PORT}`);
     console.log(`WebSocket endpoint: ws://localhost:${PORT}/media-stream`);
+    console.log(`\n📞 Inbound call webhook:  ${process.env.NGROK_URL}/incoming-call`);
+    console.log(`   → Configure in Twilio Console → "A call comes in"`);
+    console.log(`\n💬 Inbound SMS webhook:   ${process.env.NGROK_URL}/sms-inbound`);
+    console.log(`   → Configure in Twilio Console → "A message comes in"`);
+    console.log(`\n📤 Outbound SMS trigger:  ${process.env.NGROK_URL}/sms-outbound?to=<phone>&message=<text>`);
+    console.log(`\n📍 Request address:       ${process.env.NGROK_URL}/request-address?to=<phone>`);
+    console.log(`📍 Get stored address:    ${process.env.NGROK_URL}/stored-address?phone=<phone>`);
+    console.log(`\n🌐 Network fallback:      POST ${process.env.NGROK_URL}/network-fallback\n`);
 });
